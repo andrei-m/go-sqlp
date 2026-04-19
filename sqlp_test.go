@@ -2,6 +2,7 @@ package sqlp
 
 import (
 	"bytes"
+	"database/sql/driver"
 	"fmt"
 	"testing"
 	"text/template"
@@ -141,6 +142,23 @@ func Test_SliceParameters(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "IN ()", sql)
 		assert.Empty(t, exec.Args())
+	})
+}
+
+type mockValuerSlice []string
+
+func (m mockValuerSlice) Value() (driver.Value, error) {
+	return "mocked", nil
+}
+
+func Test_Valuer(t *testing.T) {
+	t.Run("does not unroll types implementing driver.Valuer", func(t *testing.T) {
+		arg := mockValuerSlice{"a", "b"}
+		exec := NewExecution(DefaultExecutionConfig)
+		sql, err := executeTemplate("{{param .}}", arg, exec.Funcs())
+		require.NoError(t, err)
+		assert.Equal(t, "?", sql)
+		assert.Equal(t, []any{arg}, exec.Args())
 	})
 }
 

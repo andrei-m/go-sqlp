@@ -1,6 +1,7 @@
 package sqlp
 
 import (
+	"database/sql/driver"
 	"fmt"
 	"reflect"
 	"strings"
@@ -36,6 +37,8 @@ func NewExecution(conf ExecutionConfig) *Execution {
 //     list of placeholders (e.g., "?, ?, ?"), and each element is added as a separate
 //     argument. This is useful for "IN" clauses.
 //   - []byte: Treated as a single atomic parameter, not unrolled.
+//   - driver.Valuer: Types implementing this interface are treated as single
+//     atomic parameters even if they are slices (e.g., custom JSONB types).
 //   - All other types: Treated as a single atomic parameter.
 type Execution struct {
 	conf ExecutionConfig
@@ -60,6 +63,12 @@ func (e *Execution) Funcs() template.FuncMap {
 }
 
 func (e *Execution) param(arg any) string {
+	// If the argument implements driver.Valuer, treat it as a single parameter
+	// even if it's a slice (e.g. a custom JSONB type).
+	if _, ok := arg.(driver.Valuer); ok {
+		return e.appendAtomic(arg)
+	}
+
 	v := reflect.ValueOf(arg)
 	// []byte (slice of uint8) should be treated as a single parameter.
 	if v.Kind() == reflect.Slice && v.Type().Elem().Kind() != reflect.Uint8 {
@@ -71,6 +80,10 @@ func (e *Execution) param(arg any) string {
 		return strings.Join(positionalParams, ", ")
 	}
 
+	return e.appendAtomic(arg)
+}
+
+func (e *Execution) appendAtomic(arg any) string {
 	e.args = append(e.args, arg)
 	return e.nextPositionalParameter()
 }
