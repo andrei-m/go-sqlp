@@ -1,7 +1,10 @@
 package sqlp
 
 import (
+	"database/sql/driver"
 	"fmt"
+	"reflect"
+	"strings"
 	"text/template"
 )
 
@@ -13,7 +16,7 @@ type ExecutionConfig struct {
 
 var DefaultExecutionConfig = ExecutionConfig{
 	NumberedParameters: false,
-	FuncName: "param",
+	FuncName:           "param",
 }
 
 // NewExecution creates an Execution for use with a single text/template
@@ -27,6 +30,16 @@ func NewExecution(conf ExecutionConfig) *Execution {
 
 // Execution provides the "param" function for execution in templates
 // and collects positional parameter values.
+//
+// The "param" function handles different types as follows:
+//
+//   - Slices (e.g., []int, []string): The slice is "unrolled" into a comma-separated
+//     list of placeholders (e.g., "?, ?, ?"), and each element is added as a separate
+//     argument. This is useful for "IN" clauses.
+//   - []byte: Treated as a single atomic parameter, not unrolled.
+//   - driver.Valuer: Types implementing this interface are treated as single
+//     atomic parameters even if they are slices (e.g., custom JSONB types).
+//   - All other types: Treated as a single atomic parameter.
 type Execution struct {
 	conf ExecutionConfig
 	args []any
@@ -50,7 +63,32 @@ func (e *Execution) Funcs() template.FuncMap {
 }
 
 func (e *Execution) param(arg any) string {
+	// If the argument implements driver.Valuer, treat it as a single parameter
+	// even if it's a slice (e.g. a custom JSONB type).
+	if _, ok := arg.(driver.Valuer); ok {
+		return e.appendAtomic(arg)
+	}
+
+	v := reflect.ValueOf(arg)
+	// []byte (slice of uint8) should be treated as a single parameter.
+	if v.Kind() == reflect.Slice && v.Type().Elem().Kind() != reflect.Uint8 {
+		var positionalParams []string
+		for i := 0; i < v.Len(); i++ {
+			e.args = append(e.args, v.Index(i).Interface())
+			positionalParams = append(positionalParams, e.nextPositionalParameter())
+		}
+		return strings.Join(positionalParams, ", ")
+	}
+
+	return e.appendAtomic(arg)
+}
+
+func (e *Execution) appendAtomic(arg any) string {
 	e.args = append(e.args, arg)
+	return e.nextPositionalParameter()
+}
+
+func (e *Execution) nextPositionalParameter() string {
 	if e.conf.NumberedParameters {
 		return fmt.Sprintf("$%d", len(e.args))
 	}
