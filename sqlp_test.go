@@ -89,6 +89,61 @@ AND bar = $2`, sql)
 	})
 }
 
+func Test_SliceParameters(t *testing.T) {
+	type Params struct {
+		IDs  []int
+		Tags []string
+		Data []byte
+		Role string
+	}
+
+	t.Run("unrolls int slice with positional parameters", func(t *testing.T) {
+		p := Params{IDs: []int{1, 2, 3}}
+		exec := NewExecution(DefaultExecutionConfig)
+		sql, err := executeTemplate("WHERE id IN ({{param .IDs}})", p, exec.Funcs())
+		require.NoError(t, err)
+		assert.Equal(t, "WHERE id IN (?, ?, ?)", sql)
+		assert.Equal(t, []any{1, 2, 3}, exec.Args())
+	})
+
+	t.Run("unrolls string slice with numbered parameters", func(t *testing.T) {
+		p := Params{Tags: []string{"a", "b"}}
+		exec := NewExecution(ExecutionConfig{NumberedParameters: true, FuncName: "param"})
+		sql, err := executeTemplate("WHERE tag IN ({{param .Tags}})", p, exec.Funcs())
+		require.NoError(t, err)
+		assert.Equal(t, "WHERE tag IN ($1, $2)", sql)
+		assert.Equal(t, []any{"a", "b"}, exec.Args())
+	})
+
+	t.Run("mixed atomic and slice with numbered parameters", func(t *testing.T) {
+		p := Params{Role: "admin", IDs: []int{10, 20}}
+		exec := NewExecution(ExecutionConfig{NumberedParameters: true, FuncName: "param"})
+		sql, err := executeTemplate("WHERE role = {{param .Role}} AND id IN ({{param .IDs}})", p, exec.Funcs())
+		require.NoError(t, err)
+		assert.Equal(t, "WHERE role = $1 AND id IN ($2, $3)", sql)
+		assert.Equal(t, []any{"admin", 10, 20}, exec.Args())
+	})
+
+	t.Run("does not unroll []byte", func(t *testing.T) {
+		p := Params{Data: []byte("binary data")}
+		exec := NewExecution(DefaultExecutionConfig)
+		sql, err := executeTemplate("UPDATE t SET d = {{param .Data}}", p, exec.Funcs())
+		require.NoError(t, err)
+		assert.Equal(t, "UPDATE t SET d = ?", sql)
+		assert.Equal(t, []any{[]byte("binary data")}, exec.Args())
+	})
+
+	t.Run("empty slice", func(t *testing.T) {
+		p := Params{IDs: []int{}}
+		exec := NewExecution(DefaultExecutionConfig)
+		// Empty slice 'truthiness' should be used in a conditional block to avoid generating invalid SQL like "IN ()".
+		sql, err := executeTemplate("IN ({{param .IDs}})", p, exec.Funcs())
+		require.NoError(t, err)
+		assert.Equal(t, "IN ()", sql)
+		assert.Empty(t, exec.Args())
+	})
+}
+
 func executeTemplate(sqlTemplate string, params any, funcs template.FuncMap) (string, error) {
 	tmpl, err := template.New("sql template").Funcs(funcs).Parse(sqlTemplate)
 	if err != nil {

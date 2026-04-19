@@ -53,6 +53,21 @@ args := sqlp.Args()
 row := db.QueryRow(query, args)
 ```
 
+### Slice Unrolling
+
+`param` automatically unrolls slices (except `[]byte`) into individual placeholders, making it easy to use with `IN` clauses:
+
+```golang
+type Params struct {
+    IDs []int
+}
+p := Params{IDs: []int{1, 2, 3}}
+
+// Template: "SELECT * FROM users WHERE id IN ({{param .IDs}})"
+// Evaluates to: "SELECT * FROM users WHERE id IN (?, ?, ?)"
+// Args: []any{1, 2, 3}
+```
+
 ## Installation
 
 ```bash
